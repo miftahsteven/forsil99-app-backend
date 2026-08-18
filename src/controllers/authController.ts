@@ -1,0 +1,969 @@
+import { Request, Response } from 'express';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import { z } from 'zod';
+import { prisma } from '../lib/prisma.js';
+import { generateToken } from '../middlewares/authMiddleware.js';
+import { verifyGoogleToken, sendPushNotification } from '../services/firebase/firebaseAdmin.js';
+import { sendReferralRequestEmail, sendRegistrationApprovedEmail } from '../services/emailService.js';
+import { getParam } from '../lib/paramHelper.js';
+
+// Schemas
+export const loginSchema = z.object({
+  identifier: z.string().min(3, 'Nomor HP atau Email harus diisi.'),
+  password: z.string().min(4, 'Password minimal 4 karakter.'),
+});
+
+export const registerSchema = z.object({
+  fullName: z.string().min(2, 'Nama lengkap harus diisi.'),
+  className: z.string().min(2, 'Kelas harus dipilih.'),
+  phoneNumber: z.string().optional(),
+  email: z.string().email('Format email tidak valid.').optional(),
+  password: z.string().min(6, 'Password minimal 6 karakter.'),
+  graduationYear: z.number().default(1999),
+});
+
+export const submitRegistrationSchema = z.object({
+  googleUid: z.string(),
+  googleEmail: z.string().email(),
+  fullName: z.string().min(2),
+  nickname: z.string().optional(),
+  className: z.string().min(2),
+  whatsapp: z.string().min(8),
+  referralAccountId: z.string(),
+  referralName: z.string(),
+  selfieBase64: z.string().optional(),
+});
+
+/**
+ * Normalizer for Profile object
+ */
+export function formatProfileResponse(profile: any) {
+  if (!profile) return null;
+  return {
+    ...profile,
+    uid: profile.userId || profile.id,
+    accountId: profile.userId || profile.id,
+  };
+}
+
+export const authController = {
+  /**
+   * POST /api/v1/auth/login
+   */
+  async login(req: Request, res: Response): Promise<void> {
+    const { identifier, password } = req.body;
+    const cleanIdentifier = identifier.trim();
+
+    const user = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { email: cleanIdentifier },
+          { phoneNumber: cleanIdentifier },
+        ],
+      },
+      include: { profile: true },
+    });
+
+    if (!user || !user.passwordHash) {
+      res.status(401).json({
+        success: false,
+        message: 'Nomor HP / Email atau kata sandi tidak cocok.',
+      });
+      return;
+    }
+
+    const isMatch = await bcrypt.compare(password, user.passwordHash);
+    if (!isMatch) {
+      res.status(401).json({
+        success: false,
+        message: 'Nomor HP / Email atau kata sandi tidak cocok.',
+      });
+      return;
+    }
+
+    if (!user.isActive) {
+      res.status(403).json({
+        success: false,
+        message: 'Akun Anda telah dinonaktifkan oleh administrator.',
+      });
+      return;
+    }
+
+    // Update lastLoginAt
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { lastLoginAt: new Date() },
+    });
+
+    const token = generateToken({
+      id: user.id,
+      email: user.email,
+      phoneNumber: user.phoneNumber,
+      roles: user.roles,
+    });
+
+    res.json({
+      success: true,
+      token,
+      user: {
+        id: user.id,
+        uid: user.id,
+        email: user.email,
+        phoneNumber: user.phoneNumber,
+        roles: user.roles,
+        verificationStatus: user.verificationStatus,
+        isActive: user.isActive,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt,
+      },
+      profile: formatProfileResponse(user.profile),
+    });
+  },
+
+  /**
+   * POST /api/v1/auth/register
+   */
+  async register(req: Request, res: Response): Promise<void> {
+    const { fullName, className, phoneNumber, email, password, graduationYear } = req.body;
+
+    // Check if phone or email already taken
+    if (phoneNumber) {
+      const existingPhone = await prisma.user.findUnique({ where: { phoneNumber } });
+      if (existingPhone) {
+        res.status(400).json({ success: false, message: 'Nomor HP sudah terdaftar.' });
+        return;
+      }
+    }
+
+    if (email) {
+      const existingEmail = await prisma.user.findUnique({ where: { email } });
+      if (existingEmail) {
+        res.status(400).json({ success: false, message: 'Email sudah terdaftar.' });
+        return;
+      }
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const passwordHash = await bcrypt.hash(password, salt);
+
+    const user = await prisma.user.create({
+      data: {
+        phoneNumber: phoneNumber || null,
+        email: email || null,
+        passwordHash,
+        roles: ['alumni'],
+        verificationStatus: 'approved',
+        profile: {
+          create: {
+            fullName,
+            className,
+            graduationYear: graduationYear || 1999,
+            schoolCode: 'SMAN59JKT',
+            searchKeywords: [fullName.toLowerCase(), className.toLowerCase()],
+            verifiedAt: new Date(),
+          },
+        },
+      },
+      include: { profile: true },
+    });
+
+    const token = generateToken({
+      id: user.id,
+      email: user.email,
+      phoneNumber: user.phoneNumber,
+      roles: user.roles,
+    });
+
+    res.status(201).json({
+      success: true,
+      token,
+      user: {
+        id: user.id,
+        uid: user.id,
+        email: user.email,
+        phoneNumber: user.phoneNumber,
+        roles: user.roles,
+        verificationStatus: user.verificationStatus,
+        isActive: user.isActive,
+      },
+      profile: formatProfileResponse(user.profile),
+    });
+  },
+
+  /**
+   * GET /api/v1/auth/me
+   */
+  async getMe(req: Request, res: Response): Promise<void> {
+    const userId = req.user?.id;
+    if (!userId) {
+      res.status(401).json({ success: false, message: 'Autentikasi diperlukan.' });
+      return;
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { profile: true },
+    });
+
+    if (!user) {
+      res.status(404).json({ success: false, message: 'Pengguna tidak ditemukan.' });
+      return;
+    }
+
+    res.json({
+      success: true,
+      user: {
+        id: user.id,
+        uid: user.id,
+        email: user.email,
+        phoneNumber: user.phoneNumber,
+        roles: user.roles,
+        verificationStatus: user.verificationStatus,
+        isActive: user.isActive,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt,
+      },
+      profile: formatProfileResponse(user.profile),
+    });
+  },
+
+  /**
+   * POST /api/v1/alumni-registration/google-login
+   */
+  async googleLogin(req: Request, res: Response): Promise<void> {
+    const { idToken } = req.body;
+    if (!idToken) {
+      res.status(400).json({ success: false, message: 'Google ID Token wajib diberikan.' });
+      return;
+    }
+
+    const googlePayload = await verifyGoogleToken(idToken);
+    if (!googlePayload) {
+      res.status(401).json({ success: false, message: 'Token Google tidak valid atau kedaluwarsa.' });
+      return;
+    }
+
+    const { googleUid, email, name, picture } = googlePayload;
+
+    // 1. Check if user already exists with googleUid or email
+    const existingUser = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { googleUid },
+          { email: email || '___invalid___' },
+        ],
+      },
+      include: { profile: true },
+    });
+
+    if (existingUser) {
+      if (!existingUser.googleUid) {
+        await prisma.user.update({
+          where: { id: existingUser.id },
+          data: { googleUid },
+        });
+      }
+
+      const token = generateToken({
+        id: existingUser.id,
+        email: existingUser.email,
+        phoneNumber: existingUser.phoneNumber,
+        roles: existingUser.roles,
+      });
+
+      res.json({
+        success: true,
+        loginState: 'approved',
+        token,
+        user: {
+          id: existingUser.id,
+          uid: existingUser.id,
+          email: existingUser.email,
+          roles: existingUser.roles,
+          verificationStatus: existingUser.verificationStatus,
+        },
+        profile: formatProfileResponse(existingUser.profile),
+      });
+      return;
+    }
+
+    // 2. Check if there is an existing AlumniRegistration submission
+    const existingReg = await prisma.alumniRegistration.findUnique({
+      where: { googleUid },
+    });
+
+    if (existingReg) {
+      if (existingReg.status === 'approved') {
+        const newUser = await prisma.user.create({
+          data: {
+            googleUid,
+            email: existingReg.googleEmail,
+            phoneNumber: existingReg.whatsapp,
+            roles: ['alumni'],
+            verificationStatus: 'approved',
+            profile: {
+              create: {
+                fullName: existingReg.fullName,
+                nickname: existingReg.nickname,
+                className: existingReg.className,
+                profilePhotoUrl: existingReg.selfieBase64 || existingReg.selfieUrl || picture || null,
+                graduationYear: 1999,
+                schoolCode: 'SMAN59JKT',
+                searchKeywords: [existingReg.fullName.toLowerCase(), existingReg.className.toLowerCase()],
+                verifiedAt: new Date(),
+              },
+            },
+          },
+          include: { profile: true },
+        });
+
+        const token = generateToken({
+          id: newUser.id,
+          email: newUser.email,
+          phoneNumber: newUser.phoneNumber,
+          roles: newUser.roles,
+        });
+
+        res.json({
+          success: true,
+          loginState: 'approved',
+          token,
+          user: newUser,
+          profile: formatProfileResponse(newUser.profile),
+        });
+        return;
+      } else if (existingReg.status === 'rejected') {
+        res.json({
+          success: true,
+          loginState: 'rejected',
+          registration: existingReg,
+        });
+        return;
+      } else {
+        res.json({
+          success: true,
+          loginState: 'pending',
+          registration: existingReg,
+        });
+        return;
+      }
+    }
+
+    // 3. New user – needs to complete the registration form
+    res.json({
+      success: true,
+      loginState: 'new_user',
+      googleUser: {
+        googleUid,
+        googleEmail: email,
+        googleName: name,
+        googlePhoto: picture,
+      },
+    });
+  },
+
+  /**
+   * GET /api/v1/alumni-registration/alumni-list
+   */
+  async getAlumniList(req: Request, res: Response): Promise<void> {
+    const profiles = await prisma.profile.findMany({
+      select: {
+        userId: true,
+        fullName: true,
+        nickname: true,
+        className: true,
+        profilePhotoUrl: true,
+      },
+      orderBy: { fullName: 'asc' },
+    });
+
+    const alumni = profiles.map((p) => ({
+      accountId: p.userId,
+      fullName: p.fullName,
+      nickname: p.nickname || undefined,
+      className: p.className || undefined,
+      profilePhotoUrl: p.profilePhotoUrl || undefined,
+    }));
+
+    res.json({ success: true, alumni });
+  },
+
+  /**
+   * POST /api/v1/alumni-registration/submit
+   */
+  async submitRegistration(req: Request, res: Response): Promise<void> {
+    const payload = req.body;
+
+    const registration = await prisma.alumniRegistration.upsert({
+      where: { googleUid: payload.googleUid },
+      update: {
+        googleEmail: payload.googleEmail,
+        fullName: payload.fullName,
+        nickname: payload.nickname || null,
+        className: payload.className,
+        whatsapp: payload.whatsapp,
+        referralAccountId: payload.referralAccountId,
+        referralName: payload.referralName,
+        selfieBase64: payload.selfieBase64 || null,
+        status: 'submitted',
+        submittedAt: new Date(),
+      },
+      create: {
+        googleUid: payload.googleUid,
+        googleEmail: payload.googleEmail,
+        fullName: payload.fullName,
+        nickname: payload.nickname || null,
+        className: payload.className,
+        whatsapp: payload.whatsapp,
+        referralAccountId: payload.referralAccountId,
+        referralName: payload.referralName,
+        selfieBase64: payload.selfieBase64 || null,
+        status: 'submitted',
+      },
+    });
+
+    if (payload.referralAccountId) {
+      (async () => {
+        try {
+          const referralUser = await prisma.user.findFirst({
+            where: {
+              OR: [
+                { id: payload.referralAccountId },
+                { profile: { userId: payload.referralAccountId } },
+              ],
+            },
+            include: { profile: true },
+          });
+
+          const referralEmail = referralUser?.email || 'mscodx@gmail.com';
+          const referralName = referralUser?.profile?.fullName || payload.referralName || 'Alumni 59';
+
+          sendReferralRequestEmail({
+            referralEmail,
+            referralName,
+            applicantName: payload.fullName,
+            applicantNickname: payload.nickname,
+            applicantClass: payload.className,
+            applicantWhatsapp: payload.whatsapp,
+            applicantEmail: payload.googleEmail,
+            applicantSelfieUrl: payload.selfieBase64,
+            registrationId: registration.id,
+            submittedAt: registration.submittedAt,
+          }).catch((err) => console.warn('Background email dispatch err:', err));
+
+          sendPushNotification({
+            recipientId: payload.referralAccountId,
+            actorName: payload.fullName,
+            type: 'verification',
+            title: 'Permintaan Konfirmasi Teman Angkatan',
+            body: `${payload.fullName} (${payload.className}) mendaftar dan memilih Anda sebagai referensi alumni 59.`,
+            data: { registrationId: registration.id },
+          }).catch((err) => console.warn('Background push dispatch err:', err));
+        } catch (err: any) {
+          console.warn('Non-blocking referral notification error:', err?.message || err);
+        }
+      })();
+    }
+
+    res.status(201).json({
+      success: true,
+      message: 'Pendaftaran berhasil diajukan. Menunggu konfirmasi dari rekan referral Anda.',
+      registration,
+    });
+  },
+
+  /**
+   * GET /api/v1/alumni-registration/status/:googleUid
+   */
+  async getRegistrationStatus(req: Request, res: Response): Promise<void> {
+    const googleUid = getParam(req.params.googleUid);
+    const registration = await prisma.alumniRegistration.findUnique({
+      where: { googleUid },
+    });
+
+    if (!registration) {
+      res.status(404).json({ success: false, message: 'Data pendaftaran tidak ditemukan.' });
+      return;
+    }
+
+    res.json({ success: true, registration });
+  },
+
+  /**
+   * GET /api/v1/alumni-registration/pending-for-referrer/:accountId
+   */
+  async getPendingForReferrer(req: Request, res: Response): Promise<void> {
+    const accountId = getParam(req.params.accountId);
+
+    const user = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { id: accountId },
+          { profile: { userId: accountId } },
+          { email: 'mscodx@gmail.com' },
+          { email: 'admin@mscode.id' },
+        ],
+      },
+      include: { profile: true },
+    });
+
+    const isGlobalAdmin =
+      accountId === 'admin_miftah_99' ||
+      user?.roles?.includes('admin') ||
+      user?.roles?.includes('super_admin');
+
+    const registrations = await prisma.alumniRegistration.findMany({
+      where: {
+        status: 'submitted',
+        ...(isGlobalAdmin
+          ? {}
+          : {
+              OR: [
+                { referralAccountId: accountId },
+                ...(user ? [{ referralAccountId: user.id }] : []),
+              ],
+            }),
+      },
+      orderBy: { submittedAt: 'desc' },
+    });
+
+    res.json({
+      success: true,
+      registrations: registrations.map((r) => ({
+        id: r.id,
+        fullName: r.fullName,
+        nickname: r.nickname || '',
+        className: r.className,
+        whatsapp: r.whatsapp,
+        googleEmail: r.googleEmail,
+        selfieBase64: r.selfieBase64 || undefined,
+        createdAt: r.submittedAt.toISOString(),
+        approvalStatus: r.status,
+      })),
+    });
+  },
+
+  /**
+   * POST /api/v1/alumni-registration/app-approve/:id
+   */
+  async appApproveRegistration(req: Request, res: Response): Promise<void> {
+    const id = getParam(req.params.id);
+    const reg = await prisma.alumniRegistration.findUnique({ where: { id } });
+
+    if (!reg) {
+      res.status(404).json({ success: false, message: 'Permohonan pendaftaran tidak ditemukan.' });
+      return;
+    }
+
+    const updatedReg = await prisma.alumniRegistration.update({
+      where: { id },
+      data: {
+        status: 'approved',
+        reviewedAt: new Date(),
+        reviewedBy: req.user?.id || 'referral_approval',
+      },
+    });
+
+    const existingUser = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { googleUid: reg.googleUid },
+          { email: reg.googleEmail },
+        ],
+      },
+    });
+
+    if (!existingUser) {
+      await prisma.user.create({
+        data: {
+          googleUid: reg.googleUid,
+          email: reg.googleEmail,
+          phoneNumber: reg.whatsapp,
+          roles: ['alumni'],
+          verificationStatus: 'approved',
+          profile: {
+            create: {
+              fullName: reg.fullName,
+              nickname: reg.nickname,
+              className: reg.className,
+              profilePhotoUrl: reg.selfieBase64 || reg.selfieUrl || null,
+              graduationYear: 1999,
+              schoolCode: 'SMAN59JKT',
+              searchKeywords: [reg.fullName.toLowerCase(), reg.className.toLowerCase()],
+              verifiedAt: new Date(),
+            },
+          },
+        },
+      });
+    }
+
+    // Auto-Follow: Newly approved applicant automatically follows the referrer
+    try {
+      const applicantUser = await prisma.user.findFirst({
+        where: {
+          OR: [{ googleUid: reg.googleUid }, { email: reg.googleEmail }],
+        },
+      });
+
+      const referrerUser = await prisma.user.findFirst({
+        where: {
+          OR: [
+            { id: reg.referralAccountId },
+            { profile: { userId: reg.referralAccountId } },
+            { email: 'mscodx@gmail.com' },
+          ],
+        },
+      });
+
+      if (applicantUser && referrerUser && applicantUser.id !== referrerUser.id) {
+        await prisma.follow.upsert({
+          where: {
+            followerId_followingId: {
+              followerId: applicantUser.id,
+              followingId: referrerUser.id,
+            },
+          },
+          update: {},
+          create: {
+            followerId: applicantUser.id,
+            followingId: referrerUser.id,
+          },
+        });
+      }
+    } catch (e) {
+      console.warn('Auto-follow referral approval error:', e);
+    }
+
+    try {
+      await sendRegistrationApprovedEmail({
+        toEmail: reg.googleEmail,
+        fullName: reg.fullName,
+        className: reg.className,
+      });
+    } catch (e) {
+      console.warn('Non-blocking approval email error:', e);
+    }
+
+    res.json({
+      success: true,
+      message: 'Pendaftaran rekan alumni berhasil disetujui.',
+      registration: updatedReg,
+    });
+  },
+
+  /**
+   * POST /api/v1/alumni-registration/app-reject/:id
+   */
+  async appRejectRegistration(req: Request, res: Response): Promise<void> {
+    const id = getParam(req.params.id);
+    const updatedReg = await prisma.alumniRegistration.update({
+      where: { id },
+      data: {
+        status: 'rejected',
+        reviewedAt: new Date(),
+        reviewedBy: req.user?.id || 'referral_reject',
+      },
+    });
+
+    res.json({
+      success: true,
+      message: 'Pendaftaran rekan alumni telah ditolak.',
+      registration: updatedReg,
+    });
+  },
+
+  /**
+   * POST /api/v1/alumni-registration/resend-referral-email
+   */
+  async resendReferralEmail(req: Request, res: Response): Promise<void> {
+    const { googleUid, registrationId, googleEmail } = req.body;
+
+    const reg = await prisma.alumniRegistration.findFirst({
+      where: {
+        OR: [
+          ...(googleUid ? [{ googleUid }] : []),
+          ...(registrationId ? [{ id: registrationId }] : []),
+          ...(googleEmail ? [{ googleEmail }] : []),
+        ],
+      },
+    });
+
+    if (!reg) {
+      res.status(404).json({ success: false, message: 'Data pendaftaran tidak ditemukan.' });
+      return;
+    }
+
+    if (reg.status === 'approved') {
+      res.status(400).json({ success: false, message: 'Pendaftaran Anda sudah disetujui sebelumnya.' });
+      return;
+    }
+
+    let referralEmail = 'mscodx@gmail.com';
+    let referralName = reg.referralName || 'Steven';
+
+    if (reg.referralAccountId) {
+      const referralUser = await prisma.user.findFirst({
+        where: {
+          OR: [
+            { id: reg.referralAccountId },
+            { profile: { userId: reg.referralAccountId } },
+          ],
+        },
+        include: { profile: true },
+      });
+
+      if (referralUser?.email) {
+        referralEmail = referralUser.email;
+      }
+      if (referralUser?.profile?.fullName) {
+        referralName = referralUser.profile.fullName;
+      }
+    }
+
+    sendReferralRequestEmail({
+      referralEmail,
+      referralName,
+      applicantName: reg.fullName,
+      applicantNickname: reg.nickname,
+      applicantClass: reg.className,
+      applicantWhatsapp: reg.whatsapp,
+      applicantEmail: reg.googleEmail,
+      applicantSelfieUrl: reg.selfieBase64 || reg.selfieUrl,
+      registrationId: reg.id,
+      submittedAt: reg.submittedAt,
+    }).catch((err) => {
+      console.warn('Background resend referral email warning:', err?.message || err);
+    });
+
+    res.json({
+      success: true,
+      emailSent: true,
+      message: `Email notifikasi referral berhasil dikirim ulang ke ${referralName} (${referralEmail}).`,
+    });
+  },
+
+  /**
+   * GET /api/v1/alumni-registration/verify-email-action?token=...&action=approve|reject
+   * Direct one-click approval / rejection from referral email
+   */
+  async verifyEmailAction(req: Request, res: Response): Promise<void> {
+    const { token, action } = req.query;
+    const jwtSecret = process.env.JWT_SECRET || 'RUANG59_SUPER_SECURE_JWT_SECRET_KEY_99_ALUMNI_AUTHENTICATION_2026';
+
+    if (!token || typeof token !== 'string') {
+      res.status(400).send(
+        renderResponseHtml({
+          title: 'Tautan Tidak Valid',
+          message: 'Tautan verifikasi email tidak valid atau parameter tidak lengkap.',
+          isSuccess: false,
+        })
+      );
+      return;
+    }
+
+    try {
+      const decoded = jwt.verify(token, jwtSecret) as any;
+      const { registrationId, referralEmail } = decoded;
+
+      const reg = await prisma.alumniRegistration.findUnique({
+        where: { id: registrationId },
+      });
+
+      if (!reg) {
+        res.status(404).send(
+          renderResponseHtml({
+            title: 'Data Tidak Ditemukan',
+            message: 'Data permohonan alumni tidak ditemukan di sistem database.',
+            isSuccess: false,
+          })
+        );
+        return;
+      }
+
+      if (reg.status === 'approved') {
+        res.send(
+          renderResponseHtml({
+            title: 'Pendaftaran Sudah Disetujui',
+            message: `Pendaftaran rekan alumni <strong>${reg.fullName}</strong> (${reg.className}) sudah disetujui sebelumnya. Akun tersebut kini sudah aktif di Forsil 99.`,
+            isSuccess: true,
+            badgeText: 'SUDAH AKTIF ✅',
+          })
+        );
+        return;
+      }
+
+      if (action === 'approve') {
+        const updatedReg = await prisma.alumniRegistration.update({
+          where: { id: registrationId },
+          data: {
+            status: 'approved',
+            reviewedAt: new Date(),
+            reviewedBy: `email_action:${referralEmail || 'referral'}`,
+          },
+        });
+
+        const existingUser = await prisma.user.findFirst({
+          where: {
+            OR: [
+              { googleUid: reg.googleUid },
+              { email: reg.googleEmail },
+            ],
+          },
+        });
+
+        if (!existingUser) {
+          await prisma.user.create({
+            data: {
+              googleUid: reg.googleUid,
+              email: reg.googleEmail,
+              phoneNumber: reg.whatsapp,
+              roles: ['alumni'],
+              verificationStatus: 'approved',
+              profile: {
+                create: {
+                  fullName: reg.fullName,
+                  nickname: reg.nickname,
+                  className: reg.className,
+                  profilePhotoUrl: reg.selfieBase64 || reg.selfieUrl || null,
+                  graduationYear: 1999,
+                  schoolCode: 'SMAN59JKT',
+                  searchKeywords: [reg.fullName.toLowerCase(), reg.className.toLowerCase()],
+                  verifiedAt: new Date(),
+                },
+              },
+            },
+          });
+        }
+
+        // Auto-Follow: Newly approved applicant automatically follows the referrer
+        try {
+          const applicantUser = await prisma.user.findFirst({
+            where: {
+              OR: [{ googleUid: reg.googleUid }, { email: reg.googleEmail }],
+            },
+          });
+
+          const referrerUser = await prisma.user.findFirst({
+            where: {
+              OR: [
+                { id: reg.referralAccountId },
+                { profile: { userId: reg.referralAccountId } },
+                { email: referralEmail || 'mscodx@gmail.com' },
+              ],
+            },
+          });
+
+          if (applicantUser && referrerUser && applicantUser.id !== referrerUser.id) {
+            await prisma.follow.upsert({
+              where: {
+                followerId_followingId: {
+                  followerId: applicantUser.id,
+                  followingId: referrerUser.id,
+                },
+              },
+              update: {},
+              create: {
+                followerId: applicantUser.id,
+                followingId: referrerUser.id,
+              },
+            });
+          }
+        } catch (e) {
+          console.warn('Auto-follow referral email approval error:', e);
+        }
+
+        try {
+          await sendRegistrationApprovedEmail({
+            toEmail: reg.googleEmail,
+            fullName: reg.fullName,
+            className: reg.className,
+          });
+        } catch (e) {
+          console.warn('Non-blocking approval email error:', e);
+        }
+
+        res.send(
+          renderResponseHtml({
+            title: 'Persetujuan Berhasil! 🎉',
+            message: `Terima kasih! Rekan alumni <strong>${reg.fullName}</strong> (Kelas ${reg.className}) telah berhasil Anda setujui untuk bergabung ke <strong>Forsil 99 SMAN 59 Jakarta</strong>.<br/><br/>Email notifikasi sukses telah dikirimkan ke <strong>${reg.googleEmail}</strong>.`,
+            isSuccess: true,
+            badgeText: 'BERHASIL DISETUJUI ✅',
+          })
+        );
+      } else {
+        await prisma.alumniRegistration.update({
+          where: { id: registrationId },
+          data: {
+            status: 'rejected',
+            reviewedAt: new Date(),
+            reviewedBy: `email_action:${referralEmail || 'referral'}`,
+          },
+        });
+
+        res.send(
+          renderResponseHtml({
+            title: 'Pendaftaran Ditolak',
+            message: `Pendaftaran atas nama <strong>${reg.fullName}</strong> telah ditolak. Terima kasih atas partisipasi Anda dalam menjaga validitas alumni Forsil 99.`,
+            isSuccess: false,
+            badgeText: 'PENDAFTARAN DITOLAK ❌',
+          })
+        );
+      }
+    } catch (err: any) {
+      res.status(400).send(
+        renderResponseHtml({
+          title: 'Tautan Kedaluwarsa',
+          message: 'Tautan konfirmasi email ini sudah kedaluwarsa atau token tidak valid.',
+          isSuccess: false,
+        })
+      );
+    }
+  },
+};
+
+function renderResponseHtml(opts: {
+  title: string;
+  message: string;
+  isSuccess: boolean;
+  badgeText?: string;
+}): string {
+  const { title, message, isSuccess, badgeText } = opts;
+  const themeColor = isSuccess ? '#16A34A' : '#DC2626';
+  const badgeBg = isSuccess ? '#DCFCE7' : '#FEE2E2';
+  const badgeColor = isSuccess ? '#166534' : '#991B1B';
+
+  return `
+    <!DOCTYPE html>
+    <html lang="id">
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>${title} - Forsil 99 SMAN 59 Jakarta</title>
+      <style>
+        * { box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #0F172A; margin: 0; padding: 20px; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+        .card { max-width: 520px; width: 100%; background: #1E293B; border-radius: 20px; padding: 36px 28px; text-align: center; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 20px 40px rgba(0,0,0,0.5); }
+        .badge { display: inline-block; padding: 6px 16px; border-radius: 999px; font-size: 13px; font-weight: 700; background: ${badgeBg}; color: ${badgeColor}; margin-bottom: 20px; }
+        .icon-circle { width: 80px; height: 80px; border-radius: 40px; background: ${isSuccess ? 'rgba(22,163,74,0.15)' : 'rgba(220,38,38,0.15)'}; border: 2px solid ${themeColor}; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; font-size: 38px; }
+        h1 { color: #FFFFFF; font-size: 24px; font-weight: 800; margin: 0 0 12px; }
+        p { color: #CBD5E1; font-size: 15px; line-height: 1.6; margin: 0 0 28px; }
+        .btn-app { display: inline-block; background: #2563EB; color: #FFFFFF; text-decoration: none; font-weight: 700; padding: 14px 28px; border-radius: 12px; font-size: 15px; box-shadow: 0 4px 14px rgba(37,99,235,0.4); }
+        .footer { font-size: 12px; color: #64748B; margin-top: 28px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 18px; }
+      </style>
+    </head>
+    <body>
+      <div class="card">
+        <div class="icon-circle">${isSuccess ? '🎉' : '🛡️'}</div>
+        ${badgeText ? `<div class="badge">${badgeText}</div>` : ''}
+        <h1>${title}</h1>
+        <p>${message}</p>
+        <div class="footer">
+          Forum Silaturahmi Alumni SMAN 59 Jakarta (Forsil 99)
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+}
+
