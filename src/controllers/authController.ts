@@ -24,8 +24,9 @@ export const registerSchema = z.object({
 });
 
 export const submitRegistrationSchema = z.object({
-  googleUid: z.string(),
-  googleEmail: z.string().email(),
+  googleUid: z.string().optional(),
+  userId: z.string().optional(),
+  googleEmail: z.string().email('Format email tidak valid.').or(z.string()),
   fullName: z.string().min(2),
   nickname: z.string().optional(),
   className: z.string().min(2),
@@ -111,6 +112,16 @@ export const authController = {
       return;
     }
 
+    if (user.verificationStatus === 'pending' && !user.roles.includes('admin')) {
+      console.warn(`[AUTH_LOGIN_PENDING] User: ${user.profile?.fullName || user.email} is pending referral approval`);
+      res.status(403).json({
+        success: false,
+        status: 'pending',
+        message: 'Pendaftaran Anda sedang menunggu persetujuan dari rekan alumni referral Anda via email. Silakan hubungi rekan Anda atau tunggu hingga email disetujui.',
+      });
+      return;
+    }
+
     // Update lastLoginAt
     await prisma.user.update({
       where: { id: user.id },
@@ -149,23 +160,37 @@ export const authController = {
    * POST /api/v1/auth/register
    */
   async register(req: Request, res: Response): Promise<void> {
-    const { fullName, className, phoneNumber, email, password, graduationYear } = req.body;
+    const {
+      fullName,
+      nickname,
+      className,
+      phoneNumber,
+      phone,
+      email,
+      password,
+      graduationYear,
+      referralAccountId,
+      referralName,
+      selfieBase64,
+    } = req.body;
+    const finalPhone = (phoneNumber || phone || '').trim();
+    const cleanEmail = (email || '').trim();
     const platform = detectPlatform(req);
 
     // Check if phone or email already taken
-    if (phoneNumber) {
-      const existingPhone = await prisma.user.findUnique({ where: { phoneNumber } });
+    if (finalPhone) {
+      const existingPhone = await prisma.user.findUnique({ where: { phoneNumber: finalPhone } });
       if (existingPhone) {
-        console.warn(`[AUTH_REGISTER_FAILED] Platform: ${platform.toUpperCase()} | Phone ${phoneNumber} already registered`);
-        res.status(400).json({ success: false, message: 'Nomor HP sudah terdaftar.' });
+        console.warn(`[AUTH_REGISTER_FAILED] Platform: ${platform.toUpperCase()} | Phone ${finalPhone} already registered`);
+        res.status(400).json({ success: false, message: 'Nomor HP/WhatsApp sudah terdaftar.' });
         return;
       }
     }
 
-    if (email) {
-      const existingEmail = await prisma.user.findUnique({ where: { email } });
+    if (cleanEmail) {
+      const existingEmail = await prisma.user.findUnique({ where: { email: cleanEmail } });
       if (existingEmail) {
-        console.warn(`[AUTH_REGISTER_FAILED] Platform: ${platform.toUpperCase()} | Email ${email} already registered`);
+        console.warn(`[AUTH_REGISTER_FAILED] Platform: ${platform.toUpperCase()} | Email ${cleanEmail} already registered`);
         res.status(400).json({ success: false, message: 'Email sudah terdaftar.' });
         return;
       }
@@ -176,48 +201,119 @@ export const authController = {
 
     const user = await prisma.user.create({
       data: {
-        phoneNumber: phoneNumber || null,
-        email: email || null,
+        phoneNumber: finalPhone || null,
+        email: cleanEmail || null,
         passwordHash,
         roles: ['alumni'],
-        verificationStatus: 'approved',
+        verificationStatus: 'pending', // PENDING verification!
         profile: {
           create: {
             fullName,
+            nickname: nickname || null,
             className,
             graduationYear: graduationYear || 1999,
             schoolCode: 'SMAN59JKT',
             searchKeywords: [fullName.toLowerCase(), className.toLowerCase()],
-            verifiedAt: new Date(),
+            profilePhotoUrl: selfieBase64 || null,
           },
         },
       },
       include: { profile: true },
     });
 
-    console.log(`[AUTH_REGISTER] ✅ Platform: ${platform.toUpperCase()} | New User: "${fullName}" (${className}) | ID: ${user.id}`);
+    console.log(`[AUTH_REGISTER] ✅ Platform: ${platform.toUpperCase()} | New User: "${fullName}" (${className}) | ID: ${user.id} | Status: PENDING`);
 
-    const token = generateToken({
-      id: user.id,
-      email: user.email,
-      phoneNumber: user.phoneNumber,
-      roles: user.roles,
-    });
+    let registrationId = '';
+    const applicantEmail = cleanEmail || `${finalPhone.replace(/[^0-9]/g, '')}@sman59.sch.id`;
+
+    if (referralAccountId) {
+      const registration = await prisma.alumniRegistration.upsert({
+        where: { googleUid: user.id },
+        update: {
+          googleEmail: applicantEmail,
+          fullName,
+          nickname: nickname || null,
+          className,
+          whatsapp: finalPhone,
+          referralAccountId,
+          referralName: referralName || 'Rekan Alumni',
+          selfieBase64: selfieBase64 || null,
+          status: 'submitted',
+          submittedAt: new Date(),
+        },
+        create: {
+          googleUid: user.id,
+          googleEmail: applicantEmail,
+          fullName,
+          nickname: nickname || null,
+          className,
+          whatsapp: finalPhone,
+          referralAccountId,
+          referralName: referralName || 'Rekan Alumni',
+          selfieBase64: selfieBase64 || null,
+          status: 'submitted',
+        },
+      });
+      registrationId = registration.id;
+
+      (async () => {
+        try {
+          const referralUser = await prisma.user.findFirst({
+            where: {
+              OR: [
+                { id: referralAccountId },
+                { profile: { userId: referralAccountId } },
+              ],
+            },
+            include: { profile: true },
+          });
+
+          const referralEmail = referralUser?.email || 'mscodx@gmail.com';
+          const refName = referralUser?.profile?.fullName || referralName || 'Alumni 59';
+
+          console.log(`[AUTH_REGISTER_EMAIL] Sending referral email to ${referralEmail} for applicant ${fullName}...`);
+          await sendReferralRequestEmail({
+            referralEmail,
+            referralName: refName,
+            applicantName: fullName,
+            applicantNickname: nickname,
+            applicantClass: className,
+            applicantWhatsapp: finalPhone,
+            applicantEmail,
+            applicantSelfieUrl: selfieBase64,
+            registrationId: registration.id,
+            submittedAt: registration.submittedAt,
+          });
+
+          await sendPushNotification({
+            recipientId: referralAccountId,
+            actorName: fullName,
+            type: 'verification',
+            title: 'Permintaan Konfirmasi Teman Angkatan',
+            body: `${fullName} (${className}) mendaftar dan memilih Anda sebagai referensi alumni 59.`,
+            data: { registrationId: registration.id },
+          }).catch(() => {});
+        } catch (err: any) {
+          console.warn('Non-blocking referral notification error:', err?.message || err);
+        }
+      })();
+    }
 
     res.status(201).json({
       success: true,
       platform,
-      token,
+      message: 'Pendaftaran berhasil. Akun Anda sedang menunggu persetujuan dari rekan alumni referral via email.',
       user: {
         id: user.id,
         uid: user.id,
         email: user.email,
         phoneNumber: user.phoneNumber,
         roles: user.roles,
-        verificationStatus: user.verificationStatus,
+        verificationStatus: 'pending',
         isActive: user.isActive,
       },
       profile: formatProfileResponse(user.profile),
+      registrationId,
     });
   },
 
@@ -424,9 +520,13 @@ export const authController = {
    */
   async submitRegistration(req: Request, res: Response): Promise<void> {
     const payload = req.body;
+    const effectiveGoogleUid =
+      payload.googleUid ||
+      payload.userId ||
+      (payload.whatsapp ? `web_${payload.whatsapp.replace(/[^0-9]/g, '')}` : `reg_${Date.now()}`);
 
     const registration = await prisma.alumniRegistration.upsert({
-      where: { googleUid: payload.googleUid },
+      where: { googleUid: effectiveGoogleUid },
       update: {
         googleEmail: payload.googleEmail,
         fullName: payload.fullName,
@@ -440,7 +540,7 @@ export const authController = {
         submittedAt: new Date(),
       },
       create: {
-        googleUid: payload.googleUid,
+        googleUid: effectiveGoogleUid,
         googleEmail: payload.googleEmail,
         fullName: payload.fullName,
         nickname: payload.nickname || null,
