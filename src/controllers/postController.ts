@@ -18,6 +18,20 @@ export function formatPostResponse(post: any, currentUserId?: string) {
     className: r.user?.profile?.className || 'Alumni 59',
   }));
 
+  const comments = (post.comments || []).map((c: any) => ({
+    id: c.id,
+    postId: c.postId,
+    authorId: c.authorId,
+    authorName: c.author?.profile?.fullName || 'Alumni 59',
+    authorPhotoUrl: c.author?.profile?.profilePhotoUrl || undefined,
+    authorClass: c.author?.profile?.className || 'Alumni 59',
+    authorIsVerified: c.author?.verificationStatus === 'approved',
+    text: c.text,
+    parentId: c.parentId || undefined,
+    likeCount: c.likeCount || 0,
+    createdAt: c.createdAt instanceof Date ? c.createdAt.toISOString() : c.createdAt,
+  }));
+
   return {
     id: post.id,
     authorId: post.authorId,
@@ -38,7 +52,8 @@ export function formatPostResponse(post: any, currentUserId?: string) {
     reactionCount: post.reactionCount ?? (post.reactions ? post.reactions.length : 0),
     userReaction: userReactionObj ? userReactionObj.reactionType : undefined,
     reactors,
-    commentCount: post.commentCount ?? (post.comments ? post.comments.length : 0),
+    comments,
+    commentCount: post.comments ? post.comments.length : (post.commentCount || 0),
     saveCount: post.saveCount || 0,
     isPinned: post.isPinned || false,
     commentsEnabled: post.commentsEnabled ?? true,
@@ -83,6 +98,14 @@ export const postController = {
               include: { profile: true },
             },
           },
+        },
+        comments: {
+          include: {
+            author: {
+              include: { profile: true },
+            },
+          },
+          orderBy: { createdAt: 'asc' },
         },
       },
       orderBy: [{ isPinned: 'desc' }, { createdAt: 'desc' }],
@@ -247,6 +270,12 @@ export const postController = {
           include: {
             user: { include: { profile: true } },
           },
+        },
+        comments: {
+          include: {
+            author: { include: { profile: true } },
+          },
+          orderBy: { createdAt: 'asc' },
         },
       },
     });
