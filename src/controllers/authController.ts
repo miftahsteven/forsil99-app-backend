@@ -937,12 +937,22 @@ export const authController = {
           where: {
             OR: [
               { googleUid: reg.googleUid },
+              { id: reg.googleUid },
               { email: reg.googleEmail },
+              { phoneNumber: reg.whatsapp },
             ],
           },
         });
 
-        if (!existingUser) {
+        if (existingUser) {
+          await prisma.user.update({
+            where: { id: existingUser.id },
+            data: {
+              verificationStatus: 'approved',
+              isActive: true,
+            },
+          });
+        } else {
           await prisma.user.create({
             data: {
               googleUid: reg.googleUid,
@@ -950,6 +960,7 @@ export const authController = {
               phoneNumber: reg.whatsapp,
               roles: ['alumni'],
               verificationStatus: 'approved',
+              isActive: true,
               profile: {
                 create: {
                   fullName: reg.fullName,
