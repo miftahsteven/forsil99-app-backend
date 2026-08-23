@@ -27,13 +27,13 @@ export const submitRegistrationSchema = z.object({
   googleUid: z.string().optional(),
   userId: z.string().optional(),
   googleEmail: z.string().email('Format email tidak valid.').or(z.string()),
-  fullName: z.string().min(2),
+  fullName: z.string().min(2, 'Nama lengkap minimal 2 karakter.'),
   nickname: z.string().optional(),
-  className: z.string().min(2),
-  whatsapp: z.string().min(8),
-  referralAccountId: z.string(),
-  referralName: z.string(),
-  selfieBase64: z.string().optional(),
+  className: z.string().min(2, 'Kelas wajib diisi.'),
+  whatsapp: z.string().min(8, 'Nomor WhatsApp minimal 8 digit.'),
+  referralAccountId: z.string().min(1, 'Rekan alumni referral (teman seangkatan) wajib dipilih.'),
+  referralName: z.string().min(1, 'Nama rekan referral wajib tertera.'),
+  selfieBase64: z.string().min(1, 'Foto selfie verifikasi wajah wajib diunggah.'),
 });
 
 /**
@@ -176,6 +176,20 @@ export const authController = {
     const finalPhone = (phoneNumber || phone || '').trim();
     const cleanEmail = (email || '').trim();
     const platform = detectPlatform(req);
+
+    // Mandatory Selfie Photo Check
+    if (!selfieBase64 || typeof selfieBase64 !== 'string' || selfieBase64.trim().length === 0) {
+      console.warn(`[AUTH_REGISTER_FAILED] Platform: ${platform.toUpperCase()} | Missing mandatory selfie photo`);
+      res.status(400).json({ success: false, message: 'Foto selfie verifikasi wajah wajib diunggah.' });
+      return;
+    }
+
+    // Mandatory Referral Check
+    if (!referralAccountId || typeof referralAccountId !== 'string' || referralAccountId.trim().length === 0) {
+      console.warn(`[AUTH_REGISTER_FAILED] Platform: ${platform.toUpperCase()} | Missing mandatory referral`);
+      res.status(400).json({ success: false, message: 'Rekan alumni referral (teman seangkatan) wajib dipilih.' });
+      return;
+    }
 
     // Check if phone or email already taken
     if (finalPhone) {
