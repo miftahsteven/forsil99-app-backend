@@ -65,7 +65,7 @@ export const chatController = {
    */
   async startDirectChat(req: Request, res: Response): Promise<void> {
     const currentUserId = req.user?.id;
-    const { targetAccountId } = req.body;
+    const targetAccountId = req.body.targetAccountId || req.body.targetUserId || req.body.targetId;
 
     if (!currentUserId) {
       res.status(401).json({ success: false, message: 'Autentikasi diperlukan.' });
@@ -77,16 +77,20 @@ export const chatController = {
       return;
     }
 
-    const existingThread = await prisma.chatThread.findFirst({
+    // Check if targetAccountId is already an existing thread ID
+    let thread = await prisma.chatThread.findFirst({
       where: {
-        AND: [
-          { memberIds: { has: currentUserId } },
-          { memberIds: { has: targetAccountId } },
+        OR: [
+          { id: targetAccountId },
+          {
+            AND: [
+              { memberIds: { has: currentUserId } },
+              { memberIds: { has: targetAccountId } },
+            ],
+          },
         ],
       },
     });
-
-    let thread = existingThread;
 
     if (!thread) {
       thread = await prisma.chatThread.create({
@@ -96,8 +100,10 @@ export const chatController = {
       });
     }
 
+    const otherUserId = thread.memberIds.find((id) => id !== currentUserId) || targetAccountId;
+
     const otherProfile = await prisma.profile.findUnique({
-      where: { userId: targetAccountId },
+      where: { userId: otherUserId },
       include: { user: true },
     });
 
@@ -107,7 +113,7 @@ export const chatController = {
         id: thread.id,
         memberIds: thread.memberIds as [string, string],
         otherUser: {
-          uid: targetAccountId,
+          uid: otherUserId,
           name: otherProfile?.fullName || 'Alumni 59',
           photoUrl: otherProfile?.profilePhotoUrl || undefined,
           className: otherProfile?.className || 'Alumni 59',
@@ -167,7 +173,8 @@ export const chatController = {
   async sendMessage(req: Request, res: Response): Promise<void> {
     const threadId = getParam(req.params.id);
     const senderId = req.user?.id;
-    const { text, mediaUrl } = req.body;
+    const { text } = req.body;
+    const mediaUrl = req.body.mediaUrl || req.body.imageUrl;
 
     if (!senderId) {
       res.status(401).json({ success: false, message: 'Autentikasi diperlukan.' });
