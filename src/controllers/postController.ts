@@ -62,6 +62,9 @@ export const postController = {
 
     if (type && type !== 'all') {
       where.type = String(type);
+    } else {
+      // By default (general timeline), exclude seller product shares (shop_share)
+      where.type = { not: 'shop_share' };
     }
 
     if (q && typeof q === 'string' && q.trim().length > 0) {

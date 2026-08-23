@@ -42,6 +42,25 @@ export function formatProfileResponse(profile) {
         accountId: profile.userId || profile.id,
     };
 }
+/**
+ * Helper to detect request platform (Web, iOS Web, Android App, etc.)
+ */
+export function detectPlatform(req) {
+    const headerPlatform = req.headers['x-platform']?.toLowerCase();
+    if (headerPlatform)
+        return headerPlatform;
+    const bodyPlatform = req.body?.platform?.toLowerCase();
+    if (bodyPlatform)
+        return bodyPlatform;
+    const ua = req.get('user-agent') || '';
+    if (/android/i.test(ua) && /okhttp|expo|reactnative/i.test(ua))
+        return 'android';
+    if (/iphone|ipad|ipod/i.test(ua))
+        return 'web_ios';
+    if (/android/i.test(ua))
+        return 'web_android';
+    return 'web';
+}
 export const authController = {
     /**
      * POST /api/v1/auth/login
@@ -49,6 +68,7 @@ export const authController = {
     async login(req, res) {
         const { identifier, password } = req.body;
         const cleanIdentifier = identifier.trim();
+        const platform = detectPlatform(req);
         const user = await prisma.user.findFirst({
             where: {
                 OR: [
@@ -59,6 +79,7 @@ export const authController = {
             include: { profile: true },
         });
         if (!user || !user.passwordHash) {
+            console.warn(`[AUTH_LOGIN_FAILED] Platform: ${platform.toUpperCase()} | Identifier: ${cleanIdentifier} | Reason: User not found`);
             res.status(401).json({
                 success: false,
                 message: 'Nomor HP / Email atau kata sandi tidak cocok.',
@@ -67,6 +88,7 @@ export const authController = {
         }
         const isMatch = await bcrypt.compare(password, user.passwordHash);
         if (!isMatch) {
+            console.warn(`[AUTH_LOGIN_FAILED] Platform: ${platform.toUpperCase()} | User: ${user.profile?.fullName || user.email} | Reason: Wrong password`);
             res.status(401).json({
                 success: false,
                 message: 'Nomor HP / Email atau kata sandi tidak cocok.',
@@ -74,6 +96,7 @@ export const authController = {
             return;
         }
         if (!user.isActive) {
+            console.warn(`[AUTH_LOGIN_BLOCKED] Platform: ${platform.toUpperCase()} | User: ${user.profile?.fullName || user.email} | Reason: Inactive user`);
             res.status(403).json({
                 success: false,
                 message: 'Akun Anda telah dinonaktifkan oleh administrator.',
@@ -85,6 +108,7 @@ export const authController = {
             where: { id: user.id },
             data: { lastLoginAt: new Date() },
         });
+        console.log(`[AUTH_LOGIN] ✅ Platform: ${platform.toUpperCase()} | User: "${user.profile?.fullName || user.email || user.phoneNumber}" (ID: ${user.id}) | IP: ${req.ip} | Roles: ${user.roles.join(', ')}`);
         const token = generateToken({
             id: user.id,
             email: user.email,
@@ -93,6 +117,7 @@ export const authController = {
         });
         res.json({
             success: true,
+            platform,
             token,
             user: {
                 id: user.id,
@@ -113,10 +138,12 @@ export const authController = {
      */
     async register(req, res) {
         const { fullName, className, phoneNumber, email, password, graduationYear } = req.body;
+        const platform = detectPlatform(req);
         // Check if phone or email already taken
         if (phoneNumber) {
             const existingPhone = await prisma.user.findUnique({ where: { phoneNumber } });
             if (existingPhone) {
+                console.warn(`[AUTH_REGISTER_FAILED] Platform: ${platform.toUpperCase()} | Phone ${phoneNumber} already registered`);
                 res.status(400).json({ success: false, message: 'Nomor HP sudah terdaftar.' });
                 return;
             }
@@ -124,6 +151,7 @@ export const authController = {
         if (email) {
             const existingEmail = await prisma.user.findUnique({ where: { email } });
             if (existingEmail) {
+                console.warn(`[AUTH_REGISTER_FAILED] Platform: ${platform.toUpperCase()} | Email ${email} already registered`);
                 res.status(400).json({ success: false, message: 'Email sudah terdaftar.' });
                 return;
             }
@@ -150,6 +178,7 @@ export const authController = {
             },
             include: { profile: true },
         });
+        console.log(`[AUTH_REGISTER] ✅ Platform: ${platform.toUpperCase()} | New User: "${fullName}" (${className}) | ID: ${user.id}`);
         const token = generateToken({
             id: user.id,
             email: user.email,
@@ -158,6 +187,7 @@ export const authController = {
         });
         res.status(201).json({
             success: true,
+            platform,
             token,
             user: {
                 id: user.id,
