@@ -507,7 +507,23 @@ export const authController = {
    * GET /api/v1/alumni-registration/alumni-list
    */
   async getAlumniList(req: Request, res: Response): Promise<void> {
+    const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+
+    const whereClause: any = {};
+    if (q.length >= 3) {
+      whereClause.OR = [
+        { fullName: { contains: q, mode: 'insensitive' } },
+        { nickname: { contains: q, mode: 'insensitive' } },
+        { className: { contains: q, mode: 'insensitive' } },
+      ];
+    } else if (q.length > 0) {
+      // Query less than 3 chars returns empty
+      res.json({ success: true, alumni: [] });
+      return;
+    }
+
     const profiles = await prisma.profile.findMany({
+      where: whereClause,
       select: {
         userId: true,
         fullName: true,
@@ -516,6 +532,7 @@ export const authController = {
         profilePhotoUrl: true,
       },
       orderBy: { fullName: 'asc' },
+      take: 25,
     });
 
     const alumni = profiles.map((p) => ({
