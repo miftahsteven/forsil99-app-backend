@@ -14,6 +14,19 @@ export function formatPostResponse(post, currentUserId) {
         photoUrl: r.user?.profile?.profilePhotoUrl,
         className: r.user?.profile?.className || 'Alumni 59',
     }));
+    const comments = (post.comments || []).map((c) => ({
+        id: c.id,
+        postId: c.postId,
+        authorId: c.authorId,
+        authorName: c.author?.profile?.fullName || 'Alumni 59',
+        authorPhotoUrl: c.author?.profile?.profilePhotoUrl || undefined,
+        authorClass: c.author?.profile?.className || 'Alumni 59',
+        authorIsVerified: c.author?.verificationStatus === 'approved',
+        text: c.text,
+        parentId: c.parentId || undefined,
+        likeCount: c.likeCount || 0,
+        createdAt: c.createdAt instanceof Date ? c.createdAt.toISOString() : c.createdAt,
+    }));
     return {
         id: post.id,
         authorId: post.authorId,
@@ -34,7 +47,8 @@ export function formatPostResponse(post, currentUserId) {
         reactionCount: post.reactionCount ?? (post.reactions ? post.reactions.length : 0),
         userReaction: userReactionObj ? userReactionObj.reactionType : undefined,
         reactors,
-        commentCount: post.commentCount ?? (post.comments ? post.comments.length : 0),
+        comments,
+        commentCount: post.comments ? post.comments.length : (post.commentCount || 0),
         saveCount: post.saveCount || 0,
         isPinned: post.isPinned || false,
         commentsEnabled: post.commentsEnabled ?? true,
@@ -56,6 +70,10 @@ export const postController = {
         if (type && type !== 'all') {
             where.type = String(type);
         }
+        else {
+            // By default (general timeline), exclude seller product shares (shop_share)
+            where.type = { not: 'shop_share' };
+        }
         if (q && typeof q === 'string' && q.trim().length > 0) {
             where.text = { contains: q.trim(), mode: 'insensitive' };
         }
@@ -71,6 +89,14 @@ export const postController = {
                             include: { profile: true },
                         },
                     },
+                },
+                comments: {
+                    include: {
+                        author: {
+                            include: { profile: true },
+                        },
+                    },
+                    orderBy: { createdAt: 'asc' },
                 },
             },
             orderBy: [{ isPinned: 'desc' }, { createdAt: 'desc' }],
@@ -211,6 +237,12 @@ export const postController = {
                     include: {
                         user: { include: { profile: true } },
                     },
+                },
+                comments: {
+                    include: {
+                        author: { include: { profile: true } },
+                    },
+                    orderBy: { createdAt: 'asc' },
                 },
             },
         });
