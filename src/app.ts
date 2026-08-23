@@ -39,6 +39,35 @@ if (config.env === 'development') {
 // Apply rate limiter to API endpoints
 app.use('/api', generalLimiter);
 
+// Root /api endpoint
+app.get('/api', (req, res) => {
+  res.json({
+    name: config.appName,
+    version: '1.0.0',
+    status: 'online',
+    apiBase: '/api/v1',
+    healthCheck: '/api/v1/health',
+  });
+});
+
+// Root /api/v1 endpoint
+app.get('/api/v1', (req, res) => {
+  res.json({
+    status: 'online',
+    version: 'v1',
+    endpoints: [
+      '/api/v1/health',
+      '/api/v1/posts',
+      '/api/v1/stories',
+      '/api/v1/shops',
+      '/api/v1/products',
+      '/api/v1/auth',
+      '/api/v1/profiles',
+      '/api/v1/events',
+    ],
+  });
+});
+
 // Mount main API router under /api/v1
 app.use('/api/v1', apiRouter);
 
