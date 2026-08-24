@@ -16,12 +16,18 @@ export const loginSchema = z.object({
 
 export const registerSchema = z.object({
   fullName: z.string().min(2, 'Nama lengkap harus diisi.'),
+  nickname: z.string().optional(),
   className: z.string().min(2, 'Kelas harus dipilih.'),
   phoneNumber: z.string().optional(),
-  email: z.string().email('Format email tidak valid.').optional(),
+  phone: z.string().optional(),
+  email: z.string().email('Format email tidak valid.').optional().or(z.literal('')),
   password: z.string().min(6, 'Password minimal 6 karakter.'),
-  graduationYear: z.number().default(1999),
-});
+  graduationYear: z.number().default(1999).optional(),
+  referralAccountId: z.string().min(1, 'Rekan referral wajib dipilih.').optional(),
+  referralName: z.string().optional(),
+  selfieBase64: z.string().min(1, 'Foto selfie verifikasi wajah wajib diunggah.').optional(),
+  platform: z.string().optional(),
+}).passthrough();
 
 export const submitRegistrationSchema = z.object({
   googleUid: z.string().optional(),

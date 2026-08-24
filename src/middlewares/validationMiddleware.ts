@@ -12,9 +12,10 @@ export function validateBody(schema: ZodSchema) {
           field: err.path.join('.'),
           message: err.message,
         }));
+        const firstMessage = error.errors[0]?.message || 'Validasi input gagal.';
         res.status(400).json({
           success: false,
-          message: 'Validasi input gagal.',
+          message: firstMessage,
           errors: errorDetails,
         });
         return;
