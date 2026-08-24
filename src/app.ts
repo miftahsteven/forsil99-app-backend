@@ -84,8 +84,10 @@ app.get('/api/v1', (req, res) => {
   });
 });
 
-// Mount main API router under /api/v1
+// Mount main API router under /api/v1 and aliases
 app.use('/api/v1', apiRouter);
+app.use('/api/api/v1', apiRouter);
+app.use('/v1', apiRouter);
 
 // Health check endpoints
 app.get('/health', (req, res) => {

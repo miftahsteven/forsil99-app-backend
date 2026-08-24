@@ -63,12 +63,15 @@ export async function sendReferralRequestEmail(params: {
   }
 
   const jwtSecret = process.env.JWT_SECRET || 'RUANG59_SUPER_SECURE_JWT_SECRET_KEY_99_ALUMNI_AUTHENTICATION_2026';
-  const publicBaseUrl =
+  let publicBaseUrl =
     process.env.PUBLIC_API_URL &&
     !process.env.PUBLIC_API_URL.includes('192.168') &&
     !process.env.PUBLIC_API_URL.includes('localhost')
       ? process.env.PUBLIC_API_URL
       : 'https://forsil99.mscode.id';
+
+  // Sanitize: remove any trailing slashes, trailing /api/v1, or trailing /api to prevent duplicate /api/api/v1
+  publicBaseUrl = publicBaseUrl.trim().replace(/\/+$/, '').replace(/\/api\/v1$/, '').replace(/\/api$/, '');
 
   // Generate secure action tokens valid for 14 days
   const approveToken = jwt.sign(
