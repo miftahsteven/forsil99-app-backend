@@ -1,16 +1,17 @@
 import { Router } from 'express';
 import { authController, submitRegistrationSchema } from '../controllers/authController.js';
 import { optionalAuth } from '../middlewares/authMiddleware.js';
+import { searchAlumniLimiter, registerLimiter } from '../middlewares/rateLimiter.js';
 import { validateBody } from '../middlewares/validationMiddleware.js';
 
 export const alumniRegistrationRoutes = Router();
 
 alumniRegistrationRoutes.post('/google-login', authController.googleLogin);
-alumniRegistrationRoutes.get('/alumni-list', authController.getAlumniList);
-alumniRegistrationRoutes.post('/submit', validateBody(submitRegistrationSchema), authController.submitRegistration);
+alumniRegistrationRoutes.get('/alumni-list', searchAlumniLimiter, authController.getAlumniList);
+alumniRegistrationRoutes.post('/submit', registerLimiter, validateBody(submitRegistrationSchema), authController.submitRegistration);
 alumniRegistrationRoutes.get('/status/:googleUid', authController.getRegistrationStatus);
 alumniRegistrationRoutes.get('/pending-for-referrer/:accountId', authController.getPendingForReferrer);
 alumniRegistrationRoutes.post('/app-approve/:id', optionalAuth, authController.appApproveRegistration);
 alumniRegistrationRoutes.post('/app-reject/:id', optionalAuth, authController.appRejectRegistration);
-alumniRegistrationRoutes.post('/resend-referral-email', authController.resendReferralEmail);
+alumniRegistrationRoutes.post('/resend-referral-email', registerLimiter, authController.resendReferralEmail);
 alumniRegistrationRoutes.get('/verify-email-action', authController.verifyEmailAction);

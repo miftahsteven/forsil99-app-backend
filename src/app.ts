@@ -15,15 +15,31 @@ initFirebaseAdmin();
 
 export const app = express();
 
-// Security HTTP headers
-app.use(helmet());
+// Trust reverse proxy (Nginx, Cloudflare, AWS ELB) for accurate client IP tracking & rate limiting
+app.set('trust proxy', 1);
 
-// CORS configuration (allow mobile apps, localhost and LAN IPs)
+// Security HTTP headers
+app.use(
+  helmet({
+    crossOriginEmbedderPolicy: false,
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+  })
+);
+
+// CORS configuration (allow mobile apps, web, localhost and LAN IPs)
 app.use(
   cors({
     origin: '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'x-platform', 'X-Platform'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'Accept',
+      'x-platform',
+      'X-Platform',
+      'x-recaptcha-token',
+      'x-client-timestamp',
+    ],
   })
 );
 

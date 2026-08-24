@@ -12,16 +12,40 @@ export const generalLimiter = rateLimit({
   },
 });
 
-export const authLimiter = rateLimit({
+export const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: config.limits.authRateLimitMax,
+  max: 10, // max 10 login attempts per 15 minutes per IP
   standardHeaders: true,
   legacyHeaders: false,
   message: {
     success: false,
-    message: 'Terlalu banyak upaya login/registrasi. Demi keamanan, silakan tunggu 15 menit.',
+    message: 'Terlalu banyak percobaan masuk (login) gagal. Demi keamanan akun, silakan tunggu 15 menit sebelum mencoba kembali.',
   },
 });
+
+export const registerLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // max 5 registrations per 15 minutes per IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Terlalu banyak pendaftaran dari IP ini. Demi keamanan, silakan tunggu 15 menit.',
+  },
+});
+
+export const searchAlumniLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minute
+  max: 60, // max 60 search queries per minute
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Pencarian terlalu sering. Silakan tunggu beberapa detik.',
+  },
+});
+
+export const authLimiter = loginLimiter;
 
 export const postCreationLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour

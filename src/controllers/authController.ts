@@ -80,12 +80,13 @@ export const authController = {
    * POST /api/v1/auth/login
    */
   async login(req: Request, res: Response): Promise<void> {
-    const { identifier, password, recaptchaToken } = req.body;
-    const cleanIdentifier = identifier.trim();
+    const { identifier, password } = req.body;
+    const tokenFromReq = req.body.recaptchaToken || (req.headers['x-recaptcha-token'] as string);
+    const cleanIdentifier = String(identifier || '').trim().replace(/\0/g, '');
     const platform = detectPlatform(req);
 
     // Verify reCAPTCHA token (required for Web)
-    const recaptcha = await verifyRecaptchaToken(recaptchaToken, platform);
+    const recaptcha = await verifyRecaptchaToken(tokenFromReq, platform, 'login');
     if (!recaptcha.success) {
       console.warn(`[AUTH_LOGIN_BLOCKED] Platform: ${platform.toUpperCase()} | Reason: reCAPTCHA failed`);
       res.status(400).json({
@@ -106,6 +107,8 @@ export const authController = {
     });
 
     if (!user || !user.passwordHash) {
+      // Constant-time dummy comparison to prevent user enumeration via timing attack
+      await bcrypt.compare(String(password || ''), '$2a$12$e8xLgVpB7MhQj9v01dFw0.Yn0KqE0pC.9rMv8Zq8hVzJk4f03.6Ki');
       console.warn(`[AUTH_LOGIN_FAILED] Platform: ${platform.toUpperCase()} | Identifier: ${cleanIdentifier} | Reason: User not found`);
       res.status(401).json({
         success: false,
@@ -193,14 +196,16 @@ export const authController = {
       referralAccountId,
       referralName,
       selfieBase64,
-      recaptchaToken,
     } = req.body;
-    const finalPhone = (phoneNumber || phone || '').trim();
-    const cleanEmail = (email || '').trim();
+    const tokenFromReq = req.body.recaptchaToken || (req.headers['x-recaptcha-token'] as string);
+    const finalPhone = String(phoneNumber || phone || '').trim().replace(/\0/g, '');
+    const cleanEmail = String(email || '').trim().replace(/\0/g, '');
+    const cleanFullName = String(fullName || '').trim().replace(/\0/g, '');
+    const cleanNickname = nickname ? String(nickname).trim().replace(/\0/g, '') : undefined;
     const platform = detectPlatform(req);
 
     // Verify reCAPTCHA token (required for Web)
-    const recaptcha = await verifyRecaptchaToken(recaptchaToken, platform);
+    const recaptcha = await verifyRecaptchaToken(tokenFromReq, platform, 'register');
     if (!recaptcha.success) {
       console.warn(`[AUTH_REGISTER_BLOCKED] Platform: ${platform.toUpperCase()} | Reason: reCAPTCHA failed`);
       res.status(400).json({
