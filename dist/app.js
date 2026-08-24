@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
+import compression from 'compression';
 import 'express-async-errors';
 import { config } from './config/index.js';
 import { generalLimiter } from './middlewares/rateLimiter.js';
@@ -13,6 +14,8 @@ initFirebaseAdmin();
 export const app = express();
 // Trust reverse proxy (Nginx, Cloudflare, AWS ELB) for accurate client IP tracking & rate limiting
 app.set('trust proxy', 1);
+// GZIP Response Compression
+app.use(compression());
 // Security HTTP headers
 app.use(helmet({
     crossOriginEmbedderPolicy: false,
@@ -68,8 +71,10 @@ app.get('/api/v1', (req, res) => {
         ],
     });
 });
-// Mount main API router under /api/v1
+// Mount main API router under /api/v1 and aliases
 app.use('/api/v1', apiRouter);
+app.use('/api/api/v1', apiRouter);
+app.use('/v1', apiRouter);
 // Health check endpoints
 app.get('/health', (req, res) => {
     res.json({

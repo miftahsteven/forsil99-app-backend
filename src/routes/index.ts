@@ -12,6 +12,7 @@ import { liveLocationRoutes } from './liveLocationRoutes.js';
 import { notificationRoutes } from './notificationRoutes.js';
 import { verificationRoutes } from './verificationRoutes.js';
 import { reportRoutes } from './reportRoutes.js';
+import { memorialRoutes } from './memorialRoutes.js';
 
 export const apiRouter = Router();
 
@@ -38,3 +39,4 @@ apiRouter.use('/live-locations', liveLocationRoutes);
 apiRouter.use('/notifications', notificationRoutes);
 apiRouter.use('/verification', verificationRoutes);
 apiRouter.use('/reports', reportRoutes);
+apiRouter.use('/memorial', memorialRoutes);

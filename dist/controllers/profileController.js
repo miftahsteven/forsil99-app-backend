@@ -2,6 +2,7 @@ import { prisma } from '../lib/prisma.js';
 import { formatProfileResponse } from './authController.js';
 import { getParam } from '../lib/paramHelper.js';
 import { sendPushNotification } from '../services/firebase/firebaseAdmin.js';
+import { optimizeImageBase64 } from '../services/imageService.js';
 async function resolveUserId(identifier) {
     const user = await prisma.user.findFirst({
         where: {
@@ -45,13 +46,50 @@ export const profileController = {
         if (seller === 'true') {
             where.sellerStatus = 'approved';
         }
+        const currentUserId = req.user?.id;
+        let followingSet = new Set();
+        if (currentUserId) {
+            const myFollows = await prisma.follow.findMany({
+                where: { followerId: currentUserId },
+                select: { followingId: true },
+            });
+            followingSet = new Set(myFollows.map((f) => f.followingId));
+        }
         const profiles = await prisma.profile.findMany({
             where,
+            select: {
+                id: true,
+                userId: true,
+                fullName: true,
+                nickname: true,
+                profilePhotoUrl: true,
+                className: true,
+                major: true,
+                graduationYear: true,
+                nia: true,
+                city: true,
+                province: true,
+                occupation: true,
+                company: true,
+                businessField: true,
+                bio: true,
+                skills: true,
+                interests: true,
+                sellerStatus: true,
+                createdAt: true,
+                updatedAt: true,
+            },
             orderBy: { fullName: 'asc' },
         });
         res.json({
             success: true,
-            profiles: profiles.map(formatProfileResponse),
+            profiles: profiles.map((p) => {
+                const formatted = formatProfileResponse(p);
+                return {
+                    ...formatted,
+                    isFollowing: followingSet.has(p.userId) || followingSet.has(p.id),
+                };
+            }),
         });
     },
     /**
@@ -80,9 +118,25 @@ export const profileController = {
             res.status(404).json({ success: false, message: 'Profil alumni tidak ditemukan.' });
             return;
         }
+        const currentUserId = req.user?.id;
+        let isFollowing = false;
+        if (currentUserId && profile.userId !== currentUserId) {
+            const follow = await prisma.follow.findUnique({
+                where: {
+                    followerId_followingId: {
+                        followerId: currentUserId,
+                        followingId: profile.userId,
+                    },
+                },
+            });
+            isFollowing = Boolean(follow);
+        }
         res.json({
             success: true,
-            profile: formatProfileResponse(profile),
+            profile: {
+                ...formatProfileResponse(profile),
+                isFollowing,
+            },
         });
     },
     /**
@@ -102,6 +156,14 @@ export const profileController = {
             occupation?.toLowerCase(),
             city?.toLowerCase(),
         ].filter(Boolean);
+        let finalProfilePhotoUrl = profilePhotoUrl;
+        if (profilePhotoUrl && typeof profilePhotoUrl === 'string' && profilePhotoUrl.startsWith('data:image')) {
+            finalProfilePhotoUrl = await optimizeImageBase64(profilePhotoUrl, { maxDimension: 600, quality: 80 });
+        }
+        let finalCoverPhotoUrl = coverPhotoUrl;
+        if (coverPhotoUrl && typeof coverPhotoUrl === 'string' && coverPhotoUrl.startsWith('data:image')) {
+            finalCoverPhotoUrl = await optimizeImageBase64(coverPhotoUrl, { maxDimension: 1200, quality: 80 });
+        }
         const profile = await prisma.profile.upsert({
             where: { userId },
             update: {
@@ -114,8 +176,8 @@ export const profileController = {
                 ...(businessField !== undefined ? { businessField } : {}),
                 ...(city !== undefined ? { city } : {}),
                 ...(province !== undefined ? { province } : {}),
-                ...(profilePhotoUrl !== undefined ? { profilePhotoUrl } : {}),
-                ...(coverPhotoUrl !== undefined ? { coverPhotoUrl } : {}),
+                ...(profilePhotoUrl !== undefined ? { profilePhotoUrl: finalProfilePhotoUrl } : {}),
+                ...(coverPhotoUrl !== undefined ? { coverPhotoUrl: finalCoverPhotoUrl } : {}),
                 ...(skills ? { skills } : {}),
                 ...(interests ? { interests } : {}),
                 ...(socialLinks ? { socialLinks } : {}),
@@ -266,10 +328,22 @@ export const profileController = {
             },
             orderBy: { createdAt: 'desc' },
         });
+        const currentUserId = req.user?.id;
+        let followingSet = new Set();
+        if (currentUserId) {
+            const myFollows = await prisma.follow.findMany({
+                where: { followerId: currentUserId },
+                select: { followingId: true },
+            });
+            followingSet = new Set(myFollows.map((f) => f.followingId));
+        }
         const followers = follows
             .map((f) => f.follower.profile)
             .filter(Boolean)
-            .map(formatProfileResponse);
+            .map((p) => ({
+            ...formatProfileResponse(p),
+            isFollowing: followingSet.has(p.userId) || followingSet.has(p.id),
+        }));
         res.json({
             success: true,
             followers,
@@ -295,10 +369,22 @@ export const profileController = {
             },
             orderBy: { createdAt: 'desc' },
         });
+        const currentUserId = req.user?.id;
+        let followingSet = new Set();
+        if (currentUserId) {
+            const myFollows = await prisma.follow.findMany({
+                where: { followerId: currentUserId },
+                select: { followingId: true },
+            });
+            followingSet = new Set(myFollows.map((f) => f.followingId));
+        }
         const following = follows
             .map((f) => f.following.profile)
             .filter(Boolean)
-            .map(formatProfileResponse);
+            .map((p) => ({
+            ...formatProfileResponse(p),
+            isFollowing: followingSet.has(p.userId) || followingSet.has(p.id),
+        }));
         res.json({
             success: true,
             following,

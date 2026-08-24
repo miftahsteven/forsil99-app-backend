@@ -39,6 +39,8 @@ model User {
   reportsCreated     Report[]       @relation("UserReports")
   following          Follow[]       @relation("UserFollowing")
   followers          Follow[]       @relation("UserFollowers")
+  memorialFlowers    MemorialFlower[]
+  memorialPrayers    MemorialPrayer[]
 
   @@map("users")
 }
@@ -438,4 +440,55 @@ model ProductCategory {
   isActive  Boolean @default(true)
 
   @@map("product_categories")
+}
+
+// ==============================================================================
+// IN MEMORIAM / ALUMNI YANG TELAH TIADA
+// ==============================================================================
+
+model DeceasedAlumni {
+  id             String           @id @default(uuid())
+  fullName       String
+  nickname       String?
+  className      String?          // e.g. '3 IPA 1'
+  photoUrl       String?
+  passedAwayYear Int              // e.g. 2018
+  passedAwayDate String?          // e.g. '12 Mei 2018'
+  bio            String?          @db.Text // Pesan / untaian kenangan
+  createdById    String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  // Relations
+  flowers        MemorialFlower[]
+  prayers        MemorialPrayer[]
+
+  @@map("deceased_alumni")
+}
+
+model MemorialFlower {
+  id         String         @id @default(uuid())
+  deceasedId String
+  deceased   DeceasedAlumni @relation(fields: [deceasedId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt  DateTime       // Now + 30 days
+  createdAt  DateTime       @default(now())
+
+  @@index([deceasedId, userId, expiresAt])
+  @@map("memorial_flowers")
+}
+
+model MemorialPrayer {
+  id         String         @id @default(uuid())
+  deceasedId String
+  deceased   DeceasedAlumni @relation(fields: [deceasedId], references: [id], onDelete: Cascade)
+  authorId   String
+  author     User           @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  text       String         @db.Text
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+
+  @@index([deceasedId, createdAt])
+  @@map("memorial_prayers")
 }

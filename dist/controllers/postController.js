@@ -1,6 +1,7 @@
 import { prisma } from '../lib/prisma.js';
 import { sendPushNotification } from '../services/firebase/firebaseAdmin.js';
 import { getParam } from '../lib/paramHelper.js';
+import { optimizePostMedia, optimizeMemoryMeta } from '../services/imageService.js';
 export function formatPostResponse(post, currentUserId) {
     const authorProfile = post.author?.profile;
     const userReactionObj = currentUserId
@@ -63,14 +64,17 @@ export const postController = {
      */
     async getPosts(req, res) {
         const currentUserId = req.user?.id;
-        const { type, q } = req.query;
+        const { type, q, authorId } = req.query;
         const where = {
             moderationStatus: 'visible',
         };
+        if (authorId && typeof authorId === 'string' && authorId.trim().length > 0) {
+            where.authorId = authorId.trim();
+        }
         if (type && type !== 'all') {
             where.type = String(type);
         }
-        else {
+        else if (!where.authorId) {
             // By default (general timeline), exclude seller product shares (shop_share)
             where.type = { not: 'shop_share' };
         }
@@ -177,6 +181,7 @@ export const postController = {
                 const firstLine = (text || '').trim().split('\n')[0] || '';
                 const prodName = firstLine.slice(0, 60) || 'Lapak Seller 99';
                 const mediaUrls = Array.isArray(media) ? media.map((m) => m.url).filter(Boolean) : [];
+                const optimizedMediaUrls = await Promise.all(mediaUrls.map((u) => (u.startsWith('data:image') ? optimizePostMedia([{ url: u }]).then(res => res[0]?.url || u) : u)));
                 const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
                 const createdProduct = await prisma.product.create({
                     data: {
@@ -187,7 +192,7 @@ export const postController = {
                         categoryId: catKey,
                         categoryName: catName,
                         price: price ? Number(price) : undefined,
-                        imageUrls: mediaUrls,
+                        imageUrls: optimizedMediaUrls,
                         expiresAt,
                         status: 'active',
                     },
@@ -198,14 +203,16 @@ export const postController = {
                 console.warn('Auto-create product for shop_share error:', err);
             }
         }
+        const optimizedMedia = await optimizePostMedia(Array.isArray(media) ? media : []);
+        const optimizedMemoryMeta = await optimizeMemoryMeta(mergedMemoryMeta);
         const post = await prisma.post.create({
             data: {
                 authorId,
                 type,
                 text,
-                media: Array.isArray(media) ? media : [],
+                media: optimizedMedia,
                 visibility,
-                memoryMeta: mergedMemoryMeta,
+                memoryMeta: optimizedMemoryMeta,
                 linkedProductId: actualLinkedProductId,
                 linkedEventId,
                 commentsEnabled,
@@ -271,11 +278,15 @@ export const postController = {
             return;
         }
         const { text, media, visibility } = req.body;
+        let optimizedMedia = media;
+        if (media !== undefined) {
+            optimizedMedia = await optimizePostMedia(Array.isArray(media) ? media : []);
+        }
         const updated = await prisma.post.update({
             where: { id },
             data: {
                 ...(text !== undefined ? { text } : {}),
-                ...(media !== undefined ? { media } : {}),
+                ...(optimizedMedia !== undefined ? { media: optimizedMedia } : {}),
                 ...(visibility !== undefined ? { visibility } : {}),
             },
             include: {

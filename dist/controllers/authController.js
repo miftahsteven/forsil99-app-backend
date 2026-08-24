@@ -911,6 +911,11 @@ export const authController = {
                         data: {
                             verificationStatus: 'approved',
                             isActive: true,
+                            profile: {
+                                update: {
+                                    verifiedAt: new Date(),
+                                },
+                            },
                         },
                     });
                 }

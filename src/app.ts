@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
+import compression from 'compression';
 import 'express-async-errors';
 
 import { config } from './config/index.js';
@@ -17,6 +18,9 @@ export const app = express();
 
 // Trust reverse proxy (Nginx, Cloudflare, AWS ELB) for accurate client IP tracking & rate limiting
 app.set('trust proxy', 1);
+
+// GZIP Response Compression
+app.use(compression());
 
 // Security HTTP headers
 app.use(
