@@ -26,7 +26,7 @@ export const config = {
   limits: {
     imageUploadMaxBytes: parseInt(process.env.IMAGE_UPLOAD_MAX_BYTES || '12582912', 10), // 12MB
     rateLimitWindowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10), // 15 mins
-    rateLimitMaxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '1000', 10),
-    authRateLimitMax: parseInt(process.env.AUTH_RATE_LIMIT_MAX || '100', 10),
+    rateLimitMaxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '20000', 10), // 20,000 requests per 15 min
+    authRateLimitMax: parseInt(process.env.AUTH_RATE_LIMIT_MAX || '1000', 10),
   },
 };
