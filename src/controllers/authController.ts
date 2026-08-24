@@ -6,13 +6,16 @@ import { prisma } from '../lib/prisma.js';
 import { generateToken } from '../middlewares/authMiddleware.js';
 import { verifyGoogleToken, sendPushNotification } from '../services/firebase/firebaseAdmin.js';
 import { sendReferralRequestEmail, sendRegistrationApprovedEmail } from '../services/emailService.js';
+import { verifyRecaptchaToken } from '../services/recaptchaService.js';
 import { getParam } from '../lib/paramHelper.js';
 
 // Schemas
 export const loginSchema = z.object({
   identifier: z.string().min(3, 'Nomor HP atau Email harus diisi.'),
   password: z.string().min(4, 'Password minimal 4 karakter.'),
-});
+  recaptchaToken: z.string().optional(),
+  platform: z.string().optional(),
+}).passthrough();
 
 export const registerSchema = z.object({
   fullName: z.string().min(2, 'Nama lengkap harus diisi.'),
@@ -26,6 +29,7 @@ export const registerSchema = z.object({
   referralAccountId: z.string().min(1, 'Rekan referral wajib dipilih.').optional(),
   referralName: z.string().optional(),
   selfieBase64: z.string().min(1, 'Foto selfie verifikasi wajah wajib diunggah.').optional(),
+  recaptchaToken: z.string().optional(),
   platform: z.string().optional(),
 }).passthrough();
 
@@ -76,9 +80,20 @@ export const authController = {
    * POST /api/v1/auth/login
    */
   async login(req: Request, res: Response): Promise<void> {
-    const { identifier, password } = req.body;
+    const { identifier, password, recaptchaToken } = req.body;
     const cleanIdentifier = identifier.trim();
     const platform = detectPlatform(req);
+
+    // Verify reCAPTCHA token (required for Web)
+    const recaptcha = await verifyRecaptchaToken(recaptchaToken, platform);
+    if (!recaptcha.success) {
+      console.warn(`[AUTH_LOGIN_BLOCKED] Platform: ${platform.toUpperCase()} | Reason: reCAPTCHA failed`);
+      res.status(400).json({
+        success: false,
+        message: recaptcha.message || 'Verifikasi reCAPTCHA wajib diselesaikan.',
+      });
+      return;
+    }
 
     const user = await prisma.user.findFirst({
       where: {
@@ -178,10 +193,22 @@ export const authController = {
       referralAccountId,
       referralName,
       selfieBase64,
+      recaptchaToken,
     } = req.body;
     const finalPhone = (phoneNumber || phone || '').trim();
     const cleanEmail = (email || '').trim();
     const platform = detectPlatform(req);
+
+    // Verify reCAPTCHA token (required for Web)
+    const recaptcha = await verifyRecaptchaToken(recaptchaToken, platform);
+    if (!recaptcha.success) {
+      console.warn(`[AUTH_REGISTER_BLOCKED] Platform: ${platform.toUpperCase()} | Reason: reCAPTCHA failed`);
+      res.status(400).json({
+        success: false,
+        message: recaptcha.message || 'Verifikasi reCAPTCHA wajib diselesaikan.',
+      });
+      return;
+    }
 
     // Mandatory Selfie Photo Check
     if (!selfieBase64 || typeof selfieBase64 !== 'string' || selfieBase64.trim().length === 0) {

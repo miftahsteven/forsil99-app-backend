@@ -21,6 +21,8 @@ export const config = {
     googleWebClientId: process.env.GOOGLE_WEB_CLIENT_ID || '325547457949-ep283f1bhl94uqdeufnnj71dbin91jpv.apps.googleusercontent.com',
   },
 
+  recaptchaSecretKey: process.env.RECAPTCHA_SECRET_KEY || '6Lc2i5UtAAAAAFBDeBVrAetNCPaKBEMaX1EJW-74',
+
   limits: {
     imageUploadMaxBytes: parseInt(process.env.IMAGE_UPLOAD_MAX_BYTES || '12582912', 10), // 12MB
     rateLimitWindowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10), // 15 mins
