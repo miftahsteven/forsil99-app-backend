@@ -11,13 +11,26 @@ import { initFirebaseAdmin } from './services/firebase/firebaseAdmin.js';
 // Initialize Firebase Admin
 initFirebaseAdmin();
 export const app = express();
+// Trust reverse proxy (Nginx, Cloudflare, AWS ELB) for accurate client IP tracking & rate limiting
+app.set('trust proxy', 1);
 // Security HTTP headers
-app.use(helmet());
-// CORS configuration (allow mobile apps, localhost and LAN IPs)
+app.use(helmet({
+    crossOriginEmbedderPolicy: false,
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+}));
+// CORS configuration (allow mobile apps, web, localhost and LAN IPs)
 app.use(cors({
     origin: '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'x-platform', 'X-Platform'],
+    allowedHeaders: [
+        'Content-Type',
+        'Authorization',
+        'Accept',
+        'x-platform',
+        'X-Platform',
+        'x-recaptcha-token',
+        'x-client-timestamp',
+    ],
 }));
 // Request body parsers (supports large high-res base64 photos)
 app.use(express.json({ limit: '30mb' }));

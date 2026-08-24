@@ -5,20 +5,30 @@ import { prisma } from '../lib/prisma.js';
 import { generateToken } from '../middlewares/authMiddleware.js';
 import { verifyGoogleToken, sendPushNotification } from '../services/firebase/firebaseAdmin.js';
 import { sendReferralRequestEmail, sendRegistrationApprovedEmail } from '../services/emailService.js';
+import { verifyRecaptchaToken } from '../services/recaptchaService.js';
 import { getParam } from '../lib/paramHelper.js';
 // Schemas
 export const loginSchema = z.object({
     identifier: z.string().min(3, 'Nomor HP atau Email harus diisi.'),
     password: z.string().min(4, 'Password minimal 4 karakter.'),
-});
+    recaptchaToken: z.string().optional(),
+    platform: z.string().optional(),
+}).passthrough();
 export const registerSchema = z.object({
     fullName: z.string().min(2, 'Nama lengkap harus diisi.'),
+    nickname: z.string().optional(),
     className: z.string().min(2, 'Kelas harus dipilih.'),
     phoneNumber: z.string().optional(),
-    email: z.string().email('Format email tidak valid.').optional(),
+    phone: z.string().optional(),
+    email: z.string().email('Format email tidak valid.').optional().or(z.literal('')),
     password: z.string().min(6, 'Password minimal 6 karakter.'),
-    graduationYear: z.number().default(1999),
-});
+    graduationYear: z.number().default(1999).optional(),
+    referralAccountId: z.string().min(1, 'Rekan referral wajib dipilih.').optional(),
+    referralName: z.string().optional(),
+    selfieBase64: z.string().min(1, 'Foto selfie verifikasi wajah wajib diunggah.').optional(),
+    recaptchaToken: z.string().optional(),
+    platform: z.string().optional(),
+}).passthrough();
 export const submitRegistrationSchema = z.object({
     googleUid: z.string().optional(),
     userId: z.string().optional(),
@@ -68,8 +78,19 @@ export const authController = {
      */
     async login(req, res) {
         const { identifier, password } = req.body;
-        const cleanIdentifier = identifier.trim();
+        const tokenFromReq = req.body.recaptchaToken || req.headers['x-recaptcha-token'];
+        const cleanIdentifier = String(identifier || '').trim().replace(/\0/g, '');
         const platform = detectPlatform(req);
+        // Verify reCAPTCHA token (required for Web)
+        const recaptcha = await verifyRecaptchaToken(tokenFromReq, platform, 'login');
+        if (!recaptcha.success) {
+            console.warn(`[AUTH_LOGIN_BLOCKED] Platform: ${platform.toUpperCase()} | Reason: reCAPTCHA failed`);
+            res.status(400).json({
+                success: false,
+                message: recaptcha.message || 'Verifikasi reCAPTCHA wajib diselesaikan.',
+            });
+            return;
+        }
         const user = await prisma.user.findFirst({
             where: {
                 OR: [
@@ -80,6 +101,8 @@ export const authController = {
             include: { profile: true },
         });
         if (!user || !user.passwordHash) {
+            // Constant-time dummy comparison to prevent user enumeration via timing attack
+            await bcrypt.compare(String(password || ''), '$2a$12$e8xLgVpB7MhQj9v01dFw0.Yn0KqE0pC.9rMv8Zq8hVzJk4f03.6Ki');
             console.warn(`[AUTH_LOGIN_FAILED] Platform: ${platform.toUpperCase()} | Identifier: ${cleanIdentifier} | Reason: User not found`);
             res.status(401).json({
                 success: false,
@@ -148,9 +171,22 @@ export const authController = {
      */
     async register(req, res) {
         const { fullName, nickname, className, phoneNumber, phone, email, password, graduationYear, referralAccountId, referralName, selfieBase64, } = req.body;
-        const finalPhone = (phoneNumber || phone || '').trim();
-        const cleanEmail = (email || '').trim();
+        const tokenFromReq = req.body.recaptchaToken || req.headers['x-recaptcha-token'];
+        const finalPhone = String(phoneNumber || phone || '').trim().replace(/\0/g, '');
+        const cleanEmail = String(email || '').trim().replace(/\0/g, '');
+        const cleanFullName = String(fullName || '').trim().replace(/\0/g, '');
+        const cleanNickname = nickname ? String(nickname).trim().replace(/\0/g, '') : undefined;
         const platform = detectPlatform(req);
+        // Verify reCAPTCHA token (required for Web)
+        const recaptcha = await verifyRecaptchaToken(tokenFromReq, platform, 'register');
+        if (!recaptcha.success) {
+            console.warn(`[AUTH_REGISTER_BLOCKED] Platform: ${platform.toUpperCase()} | Reason: reCAPTCHA failed`);
+            res.status(400).json({
+                success: false,
+                message: recaptcha.message || 'Verifikasi reCAPTCHA wajib diselesaikan.',
+            });
+            return;
+        }
         // Mandatory Selfie Photo Check
         if (!selfieBase64 || typeof selfieBase64 !== 'string' || selfieBase64.trim().length === 0) {
             console.warn(`[AUTH_REGISTER_FAILED] Platform: ${platform.toUpperCase()} | Missing mandatory selfie photo`);
