@@ -1,54 +1,10 @@
 import { prisma } from '../lib/prisma.js';
-// Default initial sample records for SMAN 59 Angkatan 1999 In Memoriam
-const DEFAULT_DECEASED_RECORDS = [
-    {
-        fullName: 'Rizky Aditya Pratama',
-        nickname: 'Rizky',
-        className: '3 IPA 1',
-        passedAwayYear: 2018,
-        passedAwayDate: '14 Juli 2018',
-        photoUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&h=400&fit=crop&crop=faces',
-        bio: 'Sahabat yang selalu ramah, ceria, dan gemar membantu teman-teman di kelas 3 IPA 1. Semoga husnul khotimah dan damai di sisi Allah SWT.',
-    },
-    {
-        fullName: 'Siti Nurhaliza',
-        nickname: 'Liza',
-        className: '3 IPS 2',
-        passedAwayYear: 2020,
-        passedAwayDate: '28 November 2020',
-        photoUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400&h=400&fit=crop&crop=faces',
-        bio: 'Senyum hangat dan tawa ramahmu akan selalu menjadi kenangan abadi di hati keluarga besar alumni 59 angkatan 1999.',
-    },
-    {
-        fullName: 'Dimas Aryo Wicaksono',
-        nickname: 'Dimas',
-        className: '3 IPA 3',
-        passedAwayYear: 2022,
-        passedAwayDate: '05 Maret 2022',
-        photoUrl: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=400&h=400&fit=crop&crop=faces',
-        bio: 'Kapten basket teladan yang penuh semangat dan menginspirasi kita semua. Tempat terbaik di sisi Tuhan Yang Maha Esa.',
-    },
-];
-/**
- * Auto-seed initial deceased alumni if table is empty
- */
-async function ensureDefaultDeceasedSeed() {
-    const count = await prisma.deceasedAlumni.count();
-    if (count === 0) {
-        for (const item of DEFAULT_DECEASED_RECORDS) {
-            await prisma.deceasedAlumni.create({
-                data: item,
-            });
-        }
-    }
-}
 /**
  * GET /api/v1/memorial
  * Fetch all deceased alumni with active flower count and prayer count
  */
 export async function getDeceasedAlumni(req, res) {
     try {
-        await ensureDefaultDeceasedSeed();
         const currentUserId = req.user?.id;
         const now = new Date();
         const records = await prisma.deceasedAlumni.findMany({
