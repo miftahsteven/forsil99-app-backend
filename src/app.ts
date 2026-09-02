@@ -30,10 +30,36 @@ app.use(
   })
 );
 
-// CORS configuration (allow mobile apps, web, localhost and LAN IPs)
+// Whitelist domain origins for CORS
+const allowedOrigins = [
+  'https://forsil99.us',
+  'https://www.forsil99.us',
+  'https://forsil99.mscode.id',
+  ...(process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map((s) => s.trim()) : []),
+];
+
+// CORS configuration (restricted to authorized web origins, mobile apps, and local dev)
 app.use(
   cors({
-    origin: '*',
+    origin: (origin, callback) => {
+      // Allow requests with no origin (e.g. mobile apps, curl, Postman, server-to-server)
+      if (!origin) return callback(null, true);
+
+      // In development or local testing, allow localhost and LAN IPs
+      const isLocal =
+        origin.includes('localhost') ||
+        origin.includes('127.0.0.1') ||
+        origin.includes('192.168.') ||
+        origin.includes('10.0.');
+
+      if (isLocal || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      console.warn(`[CORS Blocked] Unauthorized origin attempted: ${origin}`);
+      return callback(new Error(`CORS policy does not allow access from origin ${origin}`), false);
+    },
+    credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     allowedHeaders: [
       'Content-Type',
